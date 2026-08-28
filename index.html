@@ -104,7 +104,7 @@
 <div class="card" style="width:auto;display:block;padding:14px;box-shadow:none">
 <div class="field"><label>Gegevens opslag</label><input type="text" value="Lokaal op deze iPhone / browser" readonly></div>
 <div class="field"><label>Geschiedenis</label><button class="btn danger" id="clearHistoryBtn">⌫ Alle opgeslagen kaarten verwijderen</button></div>
-<div class="field"><label>Versie</label><input type="text" value="1.0 — WiFi Kaarten App" readonly></div>
+<div class="field"><label>Gratis adresnauwkeurigheid (optioneel)</label><input id="geoKey" type="password" placeholder="Geoapify API key"><button class="btn secondary" id="saveGeoKeyBtn">Adres-sleutel opslaan</button><div class="hint">Voor straat + huisnummer via GPS. Zonder sleutel blijft de gratis automatische locatie beperkt tot plaats/postcode.</div></div><div class="field"><label>Versie</label><input type="text" value="1.1 — WiFi Kaarten App" readonly></div>
 <div class="hint">WiFi-wachtwoorden en klantgegevens worden in deze versie lokaal opgeslagen. Publiceer nooit echte klantgegevens in de broncode.</div>
 </div><div id="settingsStatus" class="status"></div>
 </section>
@@ -308,7 +308,8 @@ function escapeHtml(s){return String(s).replace(/[&<>"]/g,m=>({'&':'&amp;','<':'
 function openHistory(id){const d=history.find(x=>x.id===id);if(!d)return;setForm(d);exitEditMode();switchTab('previewScreen');}
 function exitEditMode(){if($('panelTitle'))$('panelTitle').textContent='Nieuwe kaart';$('generateBtn').textContent='▣ Kaart genereren';$('saveBtn').style.display='block';$('cancelEditBtn').style.display='none';$('editStatus')?.replaceChildren();}
 function deleteCard(id){const i=history.findIndex(x=>x.id===id);if(i<0)return;history.splice(i,1);writeAll();if(currentId===id){currentId=null;['customer','phone','customerNo','connectionNo','address','ssid','pw'].forEach(id=>$(id).value='');renderCard();}renderHistory();switchTab('historyScreen');flash($('formStatus'),'✓ Klant en kaart volledig verwijderd uit Geschiedenis.','ok');}
-async function locate(targetId='address',hintId='locationHint'){const target=$(targetId),hint=$(hintId);if(!navigator.geolocation){hint.textContent='Locatie is niet beschikbaar in deze browser.';return}hint.textContent='Locatie wordt opgehaald…';navigator.geolocation.getCurrentPosition(async pos=>{try{const url='https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat='+encodeURIComponent(pos.coords.latitude)+'&lon='+encodeURIComponent(pos.coords.longitude)+'&zoom=18&addressdetails=1';const r=await fetch(url,{headers:{'Accept':'application/json'}});if(!r.ok)throw new Error('Adresservice reageert niet');const j=await r.json();target.value=j.display_name||`${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}`;hint.textContent='✓ Adres via actuele locatie bijgewerkt.'}catch(e){target.value=`Locatie: ${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}`;hint.textContent='✓ GPS gevonden; straatadres kon niet worden opgehaald.'}},err=>{hint.textContent='Locatie niet toegestaan of niet beschikbaar.';} ,{enableHighAccuracy:true,timeout:10000,maximumAge:0})}
+async function locate(targetId='address',hintId='locationHint'){const target=$(targetId),hint=$(hintId);if(!navigator.geolocation){hint.textContent='Locatie is niet beschikbaar in deze browser.';return}hint.textContent='Nauwkeurige GPS-locatie wordt opgehaald…';navigator.geolocation.getCurrentPosition(async pos=>{try{const lat=pos.coords.latitude,lon=pos.coords.longitude;const accuracy=Math.round(pos.coords.accuracy||0);const geoKey=(localStorage.getItem('wifi_geoapify_key')||'').trim();let label='';if(geoKey){const u=new URL('https://api.geoapify.com/v1/geocode/reverse');u.searchParams.set('lat',lat);u.searchParams.set('lon',lon);u.searchParams.set('limit','1');u.searchParams.set('format','json');u.searchParams.set('lang','nl');u.searchParams.set('apiKey',geoKey);const r=await fetch(u);if(!r.ok)throw new Error('Geoapify reageert niet');const j=await r.json();const p=j.features&&j.features[0]&&j.features[0].properties;if(p){const street=p.street||p.name||'';const house=p.housenumber||'';const postcode=p.postcode||'';const city=p.city||p.town||p.village||p.municipality||p.suburb||'';label=[[street,house].filter(Boolean).join(' '),[postcode,city].filter(Boolean).join(' ')].filter(Boolean).join(', ');}}
+if(!label){const u=new URL('https://api.bigdatacloud.net/data/reverse-geocode-client');u.searchParams.set('latitude',lat);u.searchParams.set('longitude',lon);u.searchParams.set('localityLanguage','nl');const r=await fetch(u);if(!r.ok)throw new Error('Locatieservice reageert niet');const j=await r.json();const city=j.city||j.locality||'';const postcode=j.postcode||'';label=[postcode,city].filter(Boolean).join(' ');if(!label)label=`${lat.toFixed(6)}, ${lon.toFixed(6)}`;hint.textContent=(geoKey?'✓ Adres via GPS bijgewerkt. ':'✓ GPS gevonden. ') + `Nauwkeurigheid ±${accuracy} m.` + (geoKey?'':' Voor straat + huisnummer: voeg gratis Geoapify-sleutel toe in Instellingen.');}else{hint.textContent=`✓ Exact adres via GPS bijgewerkt. Nauwkeurigheid ±${accuracy} m.`;}target.value=label;renderCard();}catch(e){hint.textContent='GPS gevonden, maar adres kon niet worden bepaald. Controleer de locatiegegevens.';}},err=>{hint.textContent=err.code===1?'Locatietoegang geweigerd. Sta locatie toe voor deze site.':'Locatie niet beschikbaar of timing verlopen.';},{enableHighAccuracy:true,timeout:20000,maximumAge:0})}
 function showPreviewModal(){$('modalCardHolder').innerHTML='';const clone=$('card').cloneNode(true);clone.removeAttribute('id');clone.querySelectorAll('[id]').forEach(el=>el.removeAttribute('id'));$('modalCardHolder').appendChild(clone);$('previewModal').classList.add('open');setTimeout(()=>{try{const d=getData();const boxes=clone.querySelectorAll('.qr-box div');const main=boxes[0];main.innerHTML='';main.appendChild(SimpleQR.generate(buildWifiString(d.ssid,d.pw,d.security,d.hidden),260,'M'));const minis=clone.querySelectorAll('.app-qr-mini');minis[0].innerHTML='';minis[0].appendChild(SimpleQR.generate(PLUS,130,'M'));minis[1].innerHTML='';minis[1].appendChild(SimpleQR.generate(PICKX,130,'M'))}catch(e){}},0)}
 async function downloadPNG(){
   if(typeof html2canvas==='undefined'){flash($('previewStatus'),'PNG-module kan niet worden geladen.','err');return}
@@ -341,14 +342,98 @@ async function downloadPNG(){
     flash($('previewStatus'),'Opslaan mislukt: '+(e.message||e),'err');
   }
 }
-function sms(){const d=getData();if(!d.phone){flash($('previewStatus'),'Vul eerst een telefoonnummer in.','err');return}const body=`Hallo ${d.customer||''},%0A%0AHierbij uw WiFi-gegevens.%0ANetwerknaam: ${d.ssid||''}%0AWachtwoord: ${d.pw||''}%0A%0AU kunt de QR-code op de WiFi-kaart gebruiken om verbinding te maken.`;window.location.href='sms:'+encodeURIComponent(d.phone)+'?body='+body;}
+async function sms(){const d=getData();if(!d.phone){flash($('previewStatus'),'Vul eerst een telefoonnummer in.','err');return}if(typeof html2canvas==='undefined'){flash($('previewStatus'),'De kaartafbeelding kan momenteel niet worden gemaakt.','err');return}flash($('previewStatus'),'Kaart + SMS worden voorbereid…','ok');try{const canvas=await html2canvas($('card'),{scale:3,backgroundColor:'#fff',useCORS:true});const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));if(!blob)throw new Error('kaartafbeelding kon niet worden gemaakt');const file=new File([blob],`Proximus_WiFi_Kaart_${(d.ssid||'wifi').replace(/[^a-z0-9_-]/gi,'_')}.png`,{type:'image/png'});const text=`Hallo ${d.customer||''},\n\nHierbij uw WiFi-gegevens.\nNetwerknaam: ${d.ssid||''}\nWachtwoord: ${d.pw||''}\n\nDe WiFi-kaart met QR-code is toegevoegd.`;if(navigator.share&&navigator.canShare&&navigator.canShare({files:[file]})){await navigator.share({title:'Proximus WiFi Gegevens',text,files:[file]});flash($('previewStatus'),'✓ Kaart en bericht zijn klaar om via Berichten te verzenden.','ok');return}window.location.href='sms:'+encodeURIComponent(d.phone)+'?body='+encodeURIComponent(text);flash($('previewStatus'),'SMS geopend. Op dit apparaat kan de kaartafbeelding niet automatisch aan SMS worden toegevoegd.','warn')}catch(e){if(e&&e.name==='AbortError')return;flash($('previewStatus'),'Versturen mislukt: '+(e.message||e),'err')}}
 // bindings
 $('bottomHistory').addEventListener('click',()=>switchTab('historyScreen'));$('bottomNew').addEventListener('click',()=>{$('newCardBtn').click()});$('bottomSettings')?.addEventListener('click',()=>switchTab('settingsScreen'));$('clearHistoryBtn')?.addEventListener('click',()=>{if(!history.length){flash($('settingsStatus'),'Geschiedenis is al leeg.','ok');return}if(confirm('Alle opgeslagen kaarten en klantgegevens verwijderen?')){history=[];writeAll();currentId=null;renderHistory();setForm({id:null,customer:'',phone:'',customerNo:'',connectionNo:'',address:'',ssid:'',pw:'',security:'WPA',hidden:false});exitEditMode();flash($('settingsStatus'),'✓ Alle opgeslagen kaarten zijn verwijderd.','ok');}});$('cancelEditBtn').addEventListener('click',()=>{exitEditMode();});
-readAll();renderCard();renderHistory();
+const geoKeyField=$('geoKey');if(geoKeyField)geoKeyField.value=localStorage.getItem('wifi_geoapify_key')||'';if($('saveGeoKeyBtn'))$('saveGeoKeyBtn').addEventListener('click',()=>{localStorage.setItem('wifi_geoapify_key',$('geoKey').value.trim());flash($('settingsStatus'),'✓ Adress-sleutel lokaal opgeslagen.','ok');});readAll();renderCard();renderHistory();
 
 ['customer','phone','customerNo','connectionNo','address','ssid','pw','security','hidden'].forEach(id=>$(id).addEventListener('input',()=>{renderCard()}));
 $('generateBtn').addEventListener('click',()=>{if(currentId && $('cancelEditBtn').style.display!=='none'){applyEdit();return}renderCard();flash($('formStatus'),'✓ Kaart gegenereerd.','ok');switchTab('previewScreen')});$('saveBtn').addEventListener('click',saveCurrent);$('showPreviewBtn').addEventListener('click',showPreviewModal);$('previewAgainBtn').addEventListener('click',showPreviewModal);$('downloadBtn').addEventListener('click',downloadPNG);$('smsBtn').addEventListener('click',sms);$('editCurrentBtn').addEventListener('click',()=>{loadEdit()});$('printBtn').addEventListener('click',()=>window.print());$('deleteCurrentBtn').addEventListener('click',()=>{if(!currentId){flash($('previewStatus'),'Deze kaart staat nog niet in Geschiedenis.','err');return}pendingDeleteId=currentId;$('deleteModal').classList.add('open')});$('confirmDelete').addEventListener('click',()=>{if(pendingDeleteId)deleteCard(pendingDeleteId);pendingDeleteId=null;$('deleteModal').classList.remove('open')});$('cancelDelete').addEventListener('click',()=>$('deleteModal').classList.remove('open'));$('closeDelete').addEventListener('click',()=>$('deleteModal').classList.remove('open'));$('closePreview').addEventListener('click',()=>$('previewModal').classList.remove('open'));$('historySearch').addEventListener('input',()=>renderHistory());$('newCardBtn').addEventListener('click',()=>{currentId=null;exitEditMode();['customer','phone','customerNo','connectionNo','address','ssid','pw'].forEach(id=>$(id).value='');$('security').value='WPA';$('hidden').value='false';renderCard();switchTab('previewScreen')});$('applyEditBtn').addEventListener('click',applyEdit);$('locateBtn').addEventListener('click',()=>locate());$('editLocateBtn').addEventListener('click',()=>locate('editAddress','editStatus'));$('ocrBtn').addEventListener('click',()=>$('ocrFile').click());$('ocrFile').addEventListener('change',async()=>{const f=$('ocrFile').files[0];if(!f)return;if(!window.Tesseract){const s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';s.onload=()=>runOCR(f);s.onerror=()=>flash($('formStatus'),'OCR-module kon niet worden geladen.','err');document.head.appendChild(s)}else runOCR(f)});
-async function runOCR(file){flash($('formStatus'),'OCR scant SSID en wachtwoord…','ok');try{const r=await Tesseract.recognize(file,'eng',{logger:m=>{if(m.status==='recognizing text')$('formStatus').textContent='OCR '+Math.round((m.progress||0)*100)+'%…'}});const text=r.data.text;const lines=text.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);let ssid='',pw='';const ssidLine=lines.find(x=>/(SSID|network name|wifi name|wi[- ]?fi network)/i.test(x));const pwLine=lines.find(x=>/(password|passwd|pass phrase|wachtwoord|wifi key|security key)/i.test(x));if(ssidLine)ssid=ssidLine.split(/[:=]/).slice(1).join(':').trim();if(pwLine)pw=pwLine.split(/[:=]/).slice(1).join(':').trim();if(!ssid){const m=text.match(/(?:SSID|Network\s*Name)\s*[:=]?\s*([^\n]+)/i);if(m)ssid=m[1].trim()}if(!pw){const m=text.match(/(?:Password|Wachtwoord|Wi\s*Fi\s*Password)\s*[:=]?\s*([^\n]+)/i);if(m)pw=m[1].trim()}if(ssid)$('ssid').value=ssid;if(pw)$('pw').value=pw;renderCard();flash($('formStatus'),(ssid||pw)?'✓ OCR voltooid: SSID en/of wachtwoord ingevuld.':'OCR klaar, maar geen WiFi-velden herkend.','ok')}catch(e){flash($('formStatus'),'OCR mislukt: '+e.message,'err')}$('ocrFile').value=''};
+async function runOCR(file){
+  flash($('formStatus'),'OCR bereidt de foto voor…','ok');
+  try{
+    const blob=await preprocessForOCR(file);
+    if(!window.Tesseract) throw new Error('OCR-module niet geladen');
+    const r=await Tesseract.recognize(blob,'eng',{
+      logger:m=>{if(m.status==='recognizing text')$('formStatus').textContent='OCR '+Math.round((m.progress||0)*100)+'%…'}
+    });
+    const raw=(r.data.text||'').replace(/\r/g,'');
+    const lines=raw.split('\n').map(x=>x.replace(/[^\S\r\n]+/g,' ').trim()).filter(Boolean);
+    const ssidPatterns=[/wi[- ]?fi\s*(?:network|name)/i,/network\s*name/i,/ssid/i,/netwerknaam/i,/nom\s+du\s+r[ée]seau/i,/wireless\s*(?:network|name)/i];
+    const pwPatterns=[/wi[- ]?fi\s*(?:password|passphrase|key)/i,/password/i,/passwd/i,/security\s*key/i,/wachtwoord/i,/mot\s+de\s+passe/i,/network\s*key/i];
+    let ssid=pickOcrValue(raw,lines,ssidPatterns);
+    let pw=pickOcrValue(raw,lines,pwPatterns);
+    // Common router-label fallback: search for a label followed by punctuation or a nearby value.
+    if(!ssid){const m=raw.match(/(?:SSID|Wi[- ]?Fi\s*(?:Network|Name)|Network\s*Name|Netwerknaam)\s*[:=\-]?\s*([^\n\r]+)/i);if(m)ssid=cleanOcr(m[1]);}
+    if(!pw){const m=raw.match(/(?:Wi[- ]?Fi\s*(?:Password|Passphrase|Key)|Password|Wachtwoord|Security\s*Key|Network\s*Key)\s*[:=\-]?\s*([^\n\r]+)/i);if(m)pw=cleanOcr(m[1]);}
+    if(ssid)$('ssid').value=ssid;
+    if(pw)$('pw').value=pw;
+    renderCard();
+    if(ssid||pw){
+      const found=[ssid?'SSID: '+ssid:'',pw?'Wachtwoord: '+pw:''].filter(Boolean).join(' • ');
+      flash($('formStatus'),'✓ OCR gevonden — '+found,'ok');
+    }else{
+      flash($('formStatus'),'OCR kon geen WiFi-gegevens herkennen. Gebruik een scherpe foto, recht van voren, waarbij SSID en wachtwoord groot in beeld staan.','err');
+    }
+  }catch(e){flash($('formStatus'),'OCR mislukt: '+(e.message||e),'err')}
+  $('ocrFile').value='';
+}
+function cleanOcr(v){
+  return String(v||'')
+    .replace(/[|¦]/g,'I')
+    .replace(/[“”]/g,'"')
+    .replace(/[‘’]/g,"'")
+    .replace(/^[-–—:;,\.\s]+|[-–—:;,\.\s]+$/g,'')
+    .replace(/\s{2,}/g,' ')
+    .trim();
+}
+function ocrValueFromLine(line){
+  const m=String(line||'').match(/^(?:[^:=]{0,60})(?:[:=])\s*(.+)$/);
+  return m?cleanOcr(m[1]):'';
+}
+function isLikelyValue(v){
+  if(!v) return false;
+  return !/^(?:ssid|wi[- ]?fi|wifi|network(?: name)?|netwerknaam|password|wachtwoord|security key|passphrase|key)$/i.test(v);
+}
+function pickOcrValue(text,lines,patterns){
+  for(let i=0;i<lines.length;i++) {
+    const line=lines[i];
+    if(!patterns.some(re=>re.test(line))) continue;
+    const same=ocrValueFromLine(line);
+    if(isLikelyValue(same) && !patterns.some(re=>re.test(same))) return same;
+    for(let j=i+1;j<Math.min(lines.length,i+3);j++) {
+      const next=cleanOcr(lines[j]);
+      if(!next) continue;
+      if(patterns.some(re=>re.test(next))) break;
+      if(/^(?:network|name|ssid|password|wachtwoord|security|key|wifi|wi-fi)\b/i.test(next)) continue;
+      if(isLikelyValue(next)) return next;
+    }
+  }
+  return '';
+}
+async function preprocessForOCR(file){
+  const url=URL.createObjectURL(file);
+  try{
+    const img=await new Promise((resolve,reject)=>{const i=new Image();i.onload=()=>resolve(i);i.onerror=()=>reject(new Error('Afbeelding kon niet worden gelezen'));i.src=url});
+    const maxSide=2600;
+    const scale=Math.min(3,Math.max(1.5,maxSide/Math.max(img.width,img.height)));
+    const c=document.createElement('canvas');
+    c.width=Math.round(img.width*scale);c.height=Math.round(img.height*scale);
+    const ctx=c.getContext('2d',{willReadFrequently:true});
+    ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';
+    ctx.drawImage(img,0,0,c.width,c.height);
+    const data=ctx.getImageData(0,0,c.width,c.height);
+    for(let i=0;i<data.data.length;i+=4){
+      const g=Math.round(data.data[i]*.299+data.data[i+1]*.587+data.data[i+2]*.114);
+      const boosted=Math.max(0,Math.min(255,Math.round((g-128)*1.6+128)));
+      const v=boosted<170?0:255;
+      data.data[i]=data.data[i+1]=data.data[i+2]=v;
+    }
+    ctx.putImageData(data,0,0);
+    return await new Promise((resolve,reject)=>c.toBlob(b=>b?resolve(b):reject(new Error('OCR-afbeelding kon niet worden gemaakt')),'image/png',1));
+  } finally { URL.revokeObjectURL(url); }
+}
+
 window.addEventListener('beforeprint',()=>renderCard());
 })();
 </script><script>if("serviceWorker" in navigator){window.addEventListener("load",()=>navigator.serviceWorker.register("sw.js").catch(()=>{}));}</script></body></html>
